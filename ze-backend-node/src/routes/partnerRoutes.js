@@ -101,7 +101,7 @@ router.delete("/:id", async (req, res) => {
     res.status(500).json({ error: "Erro ao deletar parceiro" });
   }
 });
-// Buscar parceiro mais próximo (versão simples)
+// Buscar parceiro mais próximo (compatível com JSON real do MySQL)
 router.get("/search", async (req, res) => {
   const { long, lat } = req.query;
 
@@ -116,13 +116,12 @@ router.get("/search", async (req, res) => {
       return res.status(404).json({ error: "Nenhum parceiro cadastrado." });
     }
 
-    // Para simplificar: vamos calcular a distância entre o ponto informado e o endereço do parceiro
     const userLat = parseFloat(lat);
     const userLong = parseFloat(long);
 
-    // Função pra calcular distância entre 2 pontos (Haversine)
-    function distancia(lat1, lon1, lat2, lon2) {
-      const R = 6371; // Raio da Terra em km
+    // Função para calcular a distância (Haversine)
+    const distancia = (lat1, lon1, lat2, lon2) => {
+      const R = 6371; // raio da Terra em km
       const dLat = ((lat2 - lat1) * Math.PI) / 180;
       const dLon = ((lon2 - lon1) * Math.PI) / 180;
       const a =
@@ -132,15 +131,21 @@ router.get("/search", async (req, res) => {
           Math.sin(dLon / 2) *
           Math.sin(dLon / 2);
       const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-      return R * c; // distância em km
-    }
+      return R * c;
+    };
 
-    // Comparar distâncias e pegar o mais próximo
     let maisProximo = null;
     let menorDistancia = Infinity;
 
     for (const partner of rows) {
-      const address = JSON.parse(partner.address);
+      // 🧠 Se o campo já for um objeto, usa direto; se for string, faz parse
+      const address =
+        typeof partner.address === "string"
+          ? JSON.parse(partner.address)
+          : partner.address;
+
+      if (!address || !address.coordinates) continue;
+
       const [partnerLong, partnerLat] = address.coordinates;
 
       const dist = distancia(userLat, userLong, partnerLat, partnerLong);
@@ -151,12 +156,18 @@ router.get("/search", async (req, res) => {
       }
     }
 
+    if (!maisProximo) {
+      return res.status(404).json({ error: "Parceiro não encontrado" });
+    }
+
     res.json({
       parceiroMaisProximo: maisProximo,
-      distanciaKm: menorDistancia.toFixed(2)
+      distanciaKm: menorDistancia.toFixed(4),
     });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Erro ao buscar parceiro mais próximo." });
   }
 });
+
+
