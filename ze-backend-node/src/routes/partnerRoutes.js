@@ -84,3 +84,20 @@ router.put("/:id", async (req, res) => {
     res.status(500).json({ error: "Erro ao atualizar parceiro" });
   }
 });
+// Deletar parceiro
+router.delete("/:id", async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const [result] = await db.query("DELETE FROM partners WHERE id = ?", [id]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "Parceiro não encontrado para deletar" });
+    }
+
+    res.json({ message: "Parceiro deletado com sucesso!" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Erro ao deletar parceiro" });
+  }
+});
