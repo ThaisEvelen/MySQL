@@ -53,3 +53,34 @@ router.get("/", async (req, res) => {
     res.status(500).json({ error: "Erro ao listar parceiros" });
   }
 });
+// Atualizar parceiro existente
+router.put("/:id", async (req, res) => {
+  const { id } = req.params;
+  const { tradingName, ownerName, document, coverageArea, address } = req.body;
+
+  try {
+    const sql = `
+      UPDATE partners 
+      SET tradingName = ?, ownerName = ?, document = ?, coverageArea = ?, address = ?
+      WHERE id = ?
+    `;
+
+    const [result] = await db.query(sql, [
+      tradingName,
+      ownerName,
+      document,
+      JSON.stringify(coverageArea),
+      JSON.stringify(address),
+      id
+    ]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "Parceiro não encontrado para atualizar" });
+    }
+
+    res.json({ message: "Parceiro atualizado com sucesso!" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Erro ao atualizar parceiro" });
+  }
+});
