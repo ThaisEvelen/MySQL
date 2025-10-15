@@ -43,3 +43,13 @@ router.get("/:id", async (req, res) => {
     res.status(500).json({ error: "Erro ao buscar parceiro" });
   }
 });
+// Listar todos os parceiros
+router.get("/", async (req, res) => {
+  try {
+    const [rows] = await db.query("SELECT * FROM partners");
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Erro ao listar parceiros" });
+  }
+});
