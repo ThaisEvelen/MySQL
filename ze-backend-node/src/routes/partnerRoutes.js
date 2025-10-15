@@ -101,3 +101,62 @@ router.delete("/:id", async (req, res) => {
     res.status(500).json({ error: "Erro ao deletar parceiro" });
   }
 });
+// Buscar parceiro mais próximo (versão simples)
+router.get("/search", async (req, res) => {
+  const { long, lat } = req.query;
+
+  if (!long || !lat) {
+    return res.status(400).json({ error: "É necessário informar long e lat." });
+  }
+
+  try {
+    const [rows] = await db.query("SELECT * FROM partners");
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "Nenhum parceiro cadastrado." });
+    }
+
+    // Para simplificar: vamos calcular a distância entre o ponto informado e o endereço do parceiro
+    const userLat = parseFloat(lat);
+    const userLong = parseFloat(long);
+
+    // Função pra calcular distância entre 2 pontos (Haversine)
+    function distancia(lat1, lon1, lat2, lon2) {
+      const R = 6371; // Raio da Terra em km
+      const dLat = ((lat2 - lat1) * Math.PI) / 180;
+      const dLon = ((lon2 - lon1) * Math.PI) / 180;
+      const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos((lat1 * Math.PI) / 180) *
+          Math.cos((lat2 * Math.PI) / 180) *
+          Math.sin(dLon / 2) *
+          Math.sin(dLon / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R * c; // distância em km
+    }
+
+    // Comparar distâncias e pegar o mais próximo
+    let maisProximo = null;
+    let menorDistancia = Infinity;
+
+    for (const partner of rows) {
+      const address = JSON.parse(partner.address);
+      const [partnerLong, partnerLat] = address.coordinates;
+
+      const dist = distancia(userLat, userLong, partnerLat, partnerLong);
+
+      if (dist < menorDistancia) {
+        menorDistancia = dist;
+        maisProximo = partner;
+      }
+    }
+
+    res.json({
+      parceiroMaisProximo: maisProximo,
+      distanciaKm: menorDistancia.toFixed(2)
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Erro ao buscar parceiro mais próximo." });
+  }
+});
