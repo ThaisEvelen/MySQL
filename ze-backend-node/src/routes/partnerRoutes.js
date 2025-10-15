@@ -25,3 +25,21 @@ router.post("/", async (req, res) => {
     res.status(500).json({ error: "Erro ao criar parceiro" });
   }
 });
+
+// Buscar parceiro por ID
+router.get("/:id", async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const [rows] = await db.query("SELECT * FROM partners WHERE id = ?", [id]);
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "Parceiro não encontrado" });
+    }
+
+    res.json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Erro ao buscar parceiro" });
+  }
+});
