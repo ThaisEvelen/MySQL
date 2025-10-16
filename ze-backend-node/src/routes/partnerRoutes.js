@@ -1,5 +1,6 @@
 import express from "express";
 import { db } from "../db.js";
+import * as turf from "@turf/turf";
 
 export const router = express.Router();
 
@@ -8,8 +9,21 @@ router.post("/", async (req, res) => {
   const { id, tradingName, ownerName, document, coverageArea, address } = req.body;
 
   try {
-    const sql = `INSERT INTO partners (id, tradingName, ownerName, document, coverageArea, address)
-                 VALUES (?, ?, ?, ?, ?, ?)`;
+    // 🔎 Verifica duplicidade de ID ou documento
+    const [existe] = await db.query(
+      "SELECT * FROM partners WHERE id = ? OR document = ?",
+      [id, document]
+    );
+
+    if (existe.length > 0) {
+      return res.status(400).json({ error: "ID ou documento já cadastrado." });
+    }
+
+    // 💾 Faz a inserção se não houver duplicata
+    const sql = `
+      INSERT INTO partners (id, tradingName, ownerName, document, coverageArea, address)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `;
     await db.query(sql, [
       id,
       tradingName,
@@ -18,6 +32,7 @@ router.post("/", async (req, res) => {
       JSON.stringify(coverageArea),
       JSON.stringify(address)
     ]);
+
     res.status(201).json({ message: "Parceiro criado com sucesso!" });
   } catch (err) {
     console.error("Erro ao criar parceiro:", err);
@@ -33,6 +48,118 @@ router.get("/", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Erro ao listar parceiros" });
+  }
+});
+
+/* ---------------- Buscar parceiro mais próximo ---------------- */
+router.get("/search", async (req, res) => {
+  console.log("✅ Entrou na rota /partners/search");
+
+  const { long, lat } = req.query;
+  if (!long || !lat) {
+    return res.status(400).json({ error: "É necessário informar long e lat." });
+  }
+
+  try {
+    const [rows] = await db.query("SELECT * FROM partners");
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "Nenhum parceiro cadastrado." });
+    }
+
+    const userLat = parseFloat(lat);
+    const userLong = parseFloat(long);
+    const ponto = turf.point([userLong, userLat]);
+
+    // Função para calcular a distância (Haversine)
+    const distanciaKm = (lat1, lon1, lat2, lon2) => {
+      const R = 6371;
+      const dLat = ((lat2 - lat1) * Math.PI) / 180;
+      const dLon = ((lon2 - lon1) * Math.PI) / 180;
+      const a =
+        Math.sin(dLat / 2) ** 2 +
+        Math.cos((lat1 * Math.PI) / 180) *
+          Math.cos((lat2 * Math.PI) / 180) *
+          Math.sin(dLon / 2) ** 2;
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R * c;
+    };
+
+    let maisProximo = null;
+    let menorDist = Infinity;
+
+    for (const partner of rows) {
+      // 🗺️ Lê o coverageArea
+      let coverageArea;
+      try {
+        coverageArea =
+          typeof partner.coverageArea === "string"
+            ? JSON.parse(partner.coverageArea)
+            : partner.coverageArea;
+      } catch (err) {
+        console.error("Erro ao interpretar coverageArea:", partner.id);
+        continue;
+      }
+
+      if (
+        !coverageArea ||
+        !coverageArea.coordinates ||
+        !Array.isArray(coverageArea.coordinates)
+      ) {
+        console.warn("Parceiro sem área válida:", partner.id);
+        continue;
+      }
+
+      const area = turf.multiPolygon(coverageArea.coordinates);
+      const dentroDaArea = turf.booleanPointInPolygon(ponto, area);
+
+      if (!dentroDaArea) {
+        console.log(`❌ Ponto fora da cobertura do parceiro ${partner.id}`);
+        continue; // pula se o ponto não estiver dentro da área
+      }
+
+      // 📍 Extrai coordenadas do endereço
+      let pLat, pLng;
+      try {
+        const address =
+          typeof partner.address === "string"
+            ? JSON.parse(partner.address)
+            : partner.address;
+        if (address && Array.isArray(address.coordinates)) {
+          pLng = parseFloat(address.coordinates[0]);
+          pLat = parseFloat(address.coordinates[1]);
+        }
+      } catch (err) {
+        console.error("Erro ao ler address:", partner.id);
+        continue;
+      }
+
+      if (isNaN(pLat) || isNaN(pLng)) {
+        console.log(`⚠️ Parceiro ${partner.id} sem coordenadas válidas`);
+        continue;
+      }
+
+      // Calcula a distância
+      const dist = distanciaKm(userLat, userLong, pLat, pLng);
+      console.log(`📍 Parceiro ${partner.id}: ${pLat},${pLng} → dist = ${dist}`);
+
+      if (dist < menorDist) {
+        menorDist = dist;
+        maisProximo = partner;
+      }
+    }
+
+    if (!maisProximo) {
+      return res.status(404).json({ error: "Nenhum parceiro cobre esta área." });
+    }
+
+    return res.json({
+      mensagem: "Parceiro encontrado dentro da área de cobertura!",
+      parceiroMaisProximo: maisProximo,
+      distanciaKm: menorDist.toFixed(4)
+    });
+  } catch (err) {
+    console.error("Erro ao buscar parceiro mais próximo:", err);
+    return res.status(500).json({ error: "Erro ao buscar parceiro mais próximo." });
   }
 });
 
@@ -97,92 +224,6 @@ router.delete("/:id", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Erro ao deletar parceiro" });
-  }
-});
-
-// Buscar parceiro mais próximo (corrigido e testado)
-router.get("/search", async (req, res) => {
-  const { long, lat } = req.query;
-
-  if (!long || !lat) {
-    return res.status(400).json({ error: "É necessário informar long e lat." });
-  }
-
-  try {
-    const [rows] = await db.query("SELECT * FROM partners");
-
-    if (rows.length === 0) {
-      return res.status(404).json({ error: "Nenhum parceiro cadastrado." });
-    }
-
-    const userLat = parseFloat(lat);
-    const userLong = parseFloat(long);
-
-    // Função para calcular distância (Haversine)
-    const distancia = (lat1, lon1, lat2, lon2) => {
-      const R = 6371; // raio da Terra em km
-      const dLat = ((lat2 - lat1) * Math.PI) / 180;
-      const dLon = ((lon2 - lon1) * Math.PI) / 180;
-      const a =
-        Math.sin(dLat / 2) ** 2 +
-        Math.cos((lat1 * Math.PI) / 180) *
-          Math.cos((lat2 * Math.PI) / 180) *
-          Math.sin(dLon / 2) ** 2;
-      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-      return R * c;
-    };
-
-    let maisProximo = null;
-    let menorDistancia = Infinity;
-
-    for (const partner of rows) {
-      let address;
-
-      // 🚨 Garantia total: converte string JSON ou pega direto o objeto
-      try {
-        if (typeof partner.address === "string") {
-          address = JSON.parse(partner.address);
-        } else if (Buffer.isBuffer(partner.address)) {
-          address = JSON.parse(partner.address.toString());
-        } else {
-          address = partner.address;
-        }
-      } catch (err) {
-        console.error("Erro ao converter address:", partner.address);
-        continue; // pula este parceiro se não conseguir ler o JSON
-      }
-
-      if (!address || !address.coordinates || !Array.isArray(address.coordinates)) {
-        console.warn("Parceiro com address inválido:", partner.id);
-        continue;
-      }
-
-      const [partnerLong, partnerLat] = address.coordinates;
-
-      const dist = distancia(
-        partnerLat,  // latitude do parceiro
-        partnerLong, // longitude do parceiro
-        userLat,     // latitude do usuário
-        userLong     // longitude do usuário
-      );
-
-      if (dist < menorDistancia) {
-        menorDistancia = dist;
-        maisProximo = partner;
-      }
-    }
-
-    if (!maisProximo) {
-      return res.status(404).json({ error: "Parceiro não encontrado" });
-    }
-
-    res.json({
-      parceiroMaisProximo: maisProximo,
-      distanciaKm: menorDistancia.toFixed(4),
-    });
-  } catch (err) {
-    console.error("Erro ao buscar parceiro mais próximo:", err);
-    res.status(500).json({ error: "Erro ao buscar parceiro mais próximo." });
   }
 });
 
